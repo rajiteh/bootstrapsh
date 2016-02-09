@@ -26,7 +26,7 @@ set -e
 
 # Script vars
 SHELL_RC="${HOME}/.bashrc"
-INSTALL=(base @ clean)
+INSTALL=(base $@ clean)
 INDENT="--------->"
 _action=""
 export DEBIAN_FRONTEND=noninteractive
@@ -36,29 +36,25 @@ export DEBIAN_FRONTEND=noninteractive
 DBPASSWORD='vagrant'
 
 function install_base() {
-    _say "Enabling multiverse."
-    sudo apt-add-repository multiverse
+    _say "INSTALLING BASE DEPENDENCIES"
+    _add_apt_repository multiverse
 
-    _say "Adding extra repositories."
-    sudo add-apt-repository -y ppa:git-core/ppa > /dev/null
+    _add_apt_repository -y ppa:git-core/ppa
 
-    _say "Updating apt."
-    sudo apt-get -qq -y update > /dev/null
+    _update_apt
 
     _say "Setting locale."
     _package_install language-pack-en
     sudo locale-gen en_US.UTF-8 > /dev/null
     sudo dpkg-reconfigure locales > /dev/null
 
-    _say "Upgrading apt."
-    sudo apt-get -qq -y upgrade > /dev/null
+    _update_apt
 
-    _say "Fixing broken dependencies."
-    sudo apt-get -f install > /dev/null
+    _fix_broken_dependencies
 
-    _say "Installing essentials."
     _package_install autoconf build-essential git wget
 
+    _say "END INSTALLING BASE DEPENDENCIES"
 }
 
 function install_clean() {
@@ -168,7 +164,21 @@ function install_mysql() {
     sudo mysql_install_db > /dev/null
 }
 
+function install_apache() {
+    _package_install apache2-mpm-worker libapache2-mod-fastcgi \
+        apache2-threaded-dev apache2-utils
+
+    _say "Configuring modules."
+    sudo a2dismod php5 mpm_prefork > /dev/null
+    sudo a2enmod rewrite actions fastcgi alias mpm_worker > /dev/null
+
+    _say "Enable AllowOverride All."
+    sudo sed -i "s/AllowOverride None/AllowOverride All/g" /etc/apache2/apache2.conf
+    sudo service apache2 restart
+}
+
 function install_php() {
+    install_apache
     _package_install php5-fpm php5-cli libmcrypt-dev libssl-dev openssl
 
     _say "Installing modules."
@@ -282,6 +292,21 @@ function _say() {
     echo $INDENT $_action $@
 }
 
+function _add_apt_repository(){
+    _say "Adding apt repository ${@}"
+    sudo apt-add-repository $@ > /dev/null
+}
+
+function _update_apt(){
+    _say "Updating apt"
+    sudo apt-get -qq -y update > /dev/null
+}
+
+function _fix_broken_dependencies(){
+    _say "Fixing broken dependencies"
+    sudo apt-get -f install > /dev/null
+}
+
 function _package_install() {
     _say "Configuring ${@}."
     sudo apt-get -qq -y install $@ > /dev/null
@@ -304,11 +329,9 @@ function _ensure_line_present() {
         _say " ADDED: ${line}"
     fi
 }
-_say "WARNING:"
-_say "WARNING: YOU ARE USING AN UNMAINTAINED VERSION OF THIS SCRIPT."
-_say "WARNING: Please update your sources to"
-_say "WARNING: https://github.com/rajiteh/bootstrapsh"
-_say "WARNING:"
+
+_say "Following Packages will be installed ${INSTALL[@]}"
+
 for pkg in "${INSTALL[@]}"
 do
     IFS='=' read -ra pkg_ver <<< "${pkg}"
