@@ -35,7 +35,8 @@ Vagrant.configure(2) do |config|
   # needed. Read repo's manual to see what options are available.
   config.vm.provision "shell" do |s|
     s.path = "./bootstrap.sh"
-    s.args = [ "rbenv=2.0.0-p247", "nvm=0.10", "php", "apache", "mysql", "app" ]
+# s.args = [ "rbenv=2.0.0-p247", "nvm=0.10", "php", "apache", "mysql", "app" ]
+    s.args = [ "rbenv", "nvm", "php", "apache", "mysql" ]
     s.keep_color = true
     s.privileged = false
     s.env = { APP_DEPLOY_KEY: "$(cat ssh_keys/deploy_rsa)", APP_REPO_GIT: "git@github.com:HP41/bootstrapsh.git" }
