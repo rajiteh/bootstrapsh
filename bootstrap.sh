@@ -26,39 +26,38 @@ set -e
 
 # Script vars
 SHELL_RC="${HOME}/.bashrc"
-INSTALL=(base @ clean)
+INSTALL=(base $@ clean)
+INSTALL_LIST_WITH_DEPENDENCIES=()
 INDENT="--------->"
 _action=""
 export DEBIAN_FRONTEND=noninteractive
+
+DEPENDENCIES_PHP=(apache)
 
 
 # Package vars: mysql
 DBPASSWORD='vagrant'
 
 function install_base() {
-    _say "Enabling multiverse."
-    sudo apt-add-repository multiverse
+    _say "INSTALLING BASE DEPENDENCIES"
+    _add_apt_repository multiverse
 
-    _say "Adding extra repositories."
-    sudo add-apt-repository -y ppa:git-core/ppa > /dev/null
+    _add_apt_repository -y ppa:git-core/ppa
 
-    _say "Updating apt."
-    sudo apt-get -qq -y update > /dev/null
+    _update_apt
 
     _say "Setting locale."
     _package_install language-pack-en
     sudo locale-gen en_US.UTF-8 > /dev/null
     sudo dpkg-reconfigure locales > /dev/null
 
-    _say "Upgrading apt."
-    sudo apt-get -qq -y upgrade > /dev/null
+    _update_apt
 
-    _say "Fixing broken dependencies."
-    sudo apt-get -f install > /dev/null
+    _fix_broken_dependencies
 
-    _say "Installing essentials."
     _package_install autoconf build-essential git wget
 
+    _say "END INSTALLING BASE DEPENDENCIES"
 }
 
 function install_clean() {
@@ -74,9 +73,7 @@ function install_rbenv() {
     local default_gems="bundler foreman"
     _say "Configuring for version ${version}"
 
-    _package_install autoconf bison build-essential libssl-dev \
-        libyaml-dev libreadline6-dev zlib1g-dev libncurses5-dev \
-        libffi-dev libgdbm3 libgdbm-dev
+    _package_install autoconf bison build-essential libssl-dev libyaml-dev libreadline6-dev zlib1g-dev libncurses5-dev libffi-dev libgdbm3 libgdbm-dev
 
     _say "Installing rbenv."
     curl -s https://raw.githubusercontent.com/fesplugas/rbenv-installer/master/bin/rbenv-installer | bash
@@ -168,13 +165,19 @@ function install_mysql() {
     sudo mysql_install_db > /dev/null
 }
 
+function install_apache() {
+    _package_install apache2        
+}
+
 function install_php() {
+    #  Installing PHP mods for Apache2
+    _package_install apache2-mpm-worker libapache2-mod-fastcgi apache2-threaded-dev apache2-utils
+
     _package_install php5-fpm php5-cli libmcrypt-dev libssl-dev openssl
 
-    _say "Installing modules."
-    _package_install php5-curl php5-gd php5-intl php-pear php5-imagick php5-imap \
-        php5-mcrypt php5-memcache php5-redis php5-mysql php5-sqlite
-
+     _say "Installing modules."
+    _package_install php5-curl php5-gd php5-intl php-pear php5-imagick php5-imap php5-mcrypt php5-memcache php5-redis php5-mysql php5-sqlite
+    
     _say 'Setting up config file.'
     sudo sh -c 'cat > /etc/apache2/conf-available/php5-fpm.conf << EOL
 <IfModule mod_fastcgi.c>
@@ -189,6 +192,18 @@ function install_php() {
     </Directory>
 </IfModule>
 EOL'
+
+    sudo service apache2 restart > /dev/null
+
+    _say "Configuring Apache modules."
+    # sudo a2dismod php5 mpm_prefork > /dev/null
+    sudo a2dismod mpm_event > /dev/null
+    sudo a2enmod rewrite actions fastcgi alias mpm_worker > /dev/null
+
+    _say "Enable AllowOverride All."
+    sudo sed -i "s/AllowOverride None/AllowOverride All/g" /etc/apache2/apache2.conf
+    sudo service apache2 restart   
+
     _say 'Touching cgi-bin.'
     sudo touch /usr/lib/cgi-bin/php5.fcgi
     sudo chown -R www-data:www-data /usr/lib/cgi-bin
@@ -282,6 +297,21 @@ function _say() {
     echo $INDENT $_action $@
 }
 
+function _add_apt_repository(){
+    _say "Adding apt repository ${@}"
+    sudo apt-add-repository $@ > /dev/null
+}
+
+function _update_apt(){
+    _say "Updating apt"
+    sudo apt-get -qq -y update > /dev/null
+}
+
+function _fix_broken_dependencies(){
+    _say "Fixing broken dependencies"
+    sudo apt-get -f install > /dev/null
+}
+
 function _package_install() {
     _say "Configuring ${@}."
     sudo apt-get -qq -y install $@ > /dev/null
@@ -304,14 +334,44 @@ function _ensure_line_present() {
         _say " ADDED: ${line}"
     fi
 }
-_say "WARNING:"
-_say "WARNING: YOU ARE USING AN UNMAINTAINED VERSION OF THIS SCRIPT."
-_say "WARNING: Please update your sources to"
-_say "WARNING: https://github.com/rajiteh/bootstrapsh"
-_say "WARNING:"
-for pkg in "${INSTALL[@]}"
-do
+
+function _build_dependency_tree(){
+    temp_list=()
+    for pkg in "${INSTALL[@]}"    
+    do
+        IFS='=' read -ra pkg_ver <<< "${pkg}"
+        package_name=$(echo "${pkg_ver[0]}" | tr '[:lower:]' '[:upper:]')
+        dependency_variable_name="DEPENDENCIES_${package_name}"
+        if [ ! -z ${!dependency_variable_name} ]
+        then
+            eval "dependenciesp=\$$dependency_variable_name"
+            for dep in "${dependenciesp[@]}"
+            do
+                temp_list+=("$dep")
+            done
+        fi
+        temp_list+=("$pkg")
+    done
+    INSTALL_LIST_WITH_DEPENDENCIES=($(echo ${temp_list[@]} | tr [:space:] '\n' | awk '!a[$0]++'))
+}
+
+function _function_exists(){
+    type $1 | grep -q "function"
+}
+
+_say "Original set of install packages: ${INSTALL[@]}"
+_build_dependency_tree
+
+_say "Following packages with dependencies will be installed ${INSTALL_LIST_WITH_DEPENDENCIES[@]}"
+for pkg in "${INSTALL_LIST_WITH_DEPENDENCIES[@]}"
+do    
     IFS='=' read -ra pkg_ver <<< "${pkg}"
     _action="(${pkg_ver[0]})"
-    eval "install_${pkg_ver[0]} ${pkg_ver[1]}"
+    function_name="install_${pkg_ver[0]} ${pkg_ver[1]}"
+    if _function_exists "$function_name"
+    then
+        eval "$function_name"
+    else
+        _say "$function_name doesn't exist"
+    fi
 done
